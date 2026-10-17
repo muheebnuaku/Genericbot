@@ -1,0 +1,587 @@
+import { generateResponse } from "../services/aiService.js";
+import { getSession, addMessage, updateState, updateProfile } from "../services/session.js";
+import { searchClaims } from "../services/claimsApi.js";
+import {
+  findMemberByPhone,
+  findMemberById,
+  registerMember,
+  touchMember,
+  extractRefToken,
+} from "../services/memberService.js";
+import {
+  sendTextMessage,
+  sendButtonMessage,
+  markAsRead,
+  isBsuid,
+} from "../services/whatsapp.js";
+import config from "../config/index.js";
+
+/**
+ * First-contact welcome message. This example is written for a fact-check
+ * style assistant — rewrite the wording for whatever domain this instance
+ * is actually being built for, pulling the business name from
+ * config.company.name rather than hardcoding it. A couple of alternates in
+ * the same spirit keep repeat testing and onboarding from feeling identical
+ * every single time. Weighted so `main` shows roughly half the time.
+ */
+function pickWelcomeMessage(knownName) {
+  const nameSuffix = knownName ? `, ${knownName}` : "";
+  const name = config.company.name;
+  const main = `Welcome to ${name}${nameSuffix}!\nWhat would you like to know?\nGot a message or claim you're not sure about? Send it to me and I'll help you fact-check it and check if it may contain disinformation.`;
+  const alternates = [
+    `Hi${knownName ? ` ${knownName}` : " there"}! I'm ${name} 🤖 — here to help you check facts and spot misinformation. Ask me anything, or send me a claim you've seen and want verified.`,
+    `Hello${knownName ? ` ${knownName}` : ""}! 👋 I'm your ${name} fact-checking assistant. Seen something online you're not sure about? Send it my way and I'll help you check it.`,
+  ];
+  return Math.random() < 0.5 ? main : alternates[Math.floor(Math.random() * alternates.length)];
+}
+
+// --- Review-team session keep-alive ---
+// WhatsApp only allows interactive/button messages within 24h of last team message.
+// Every 22h we send the review team an activation request. When they reply, the 24h window reopens.
+const REVIEW_SESSION_DAYS = 30;
+const KEEP_ALIVE_INTERVAL_MS = 22 * 60 * 60 * 1000; // 22 hours
+
+let reviewKeepAliveTimer = null;
+let reviewSessionExpiry = 0; // epoch ms — 0 means inactive
+
+function startReviewKeepAlive() {
+  if (reviewKeepAliveTimer) clearInterval(reviewKeepAliveTimer);
+  reviewSessionExpiry = Date.now() + REVIEW_SESSION_DAYS * 24 * 60 * 60 * 1000;
+
+  reviewKeepAliveTimer = setInterval(async () => {
+    if (Date.now() >= reviewSessionExpiry) {
+      clearInterval(reviewKeepAliveTimer);
+      reviewKeepAliveTimer = null;
+      console.log("[Review] Keep-alive session expired");
+      return;
+    }
+    const reviewNumber = config.company.escalationWhatsApp.replace("+", "");
+    const daysLeft = Math.ceil((reviewSessionExpiry - Date.now()) / (24 * 60 * 60 * 1000));
+    try {
+      await sendButtonMessage(
+        reviewNumber,
+        `🔔 *${config.company.name} Bot — Session Activation*\n\nTap the button below to keep your escalation alerts active.\n\n⏳ Session expires in *${daysLeft} day${daysLeft !== 1 ? "s" : ""}*.`,
+        [{ id: "review_keepalive_ack", title: "✅ Keep Active" }],
+        "Stay Active"
+      );
+    } catch {
+      await sendTextMessage(
+        reviewNumber,
+        `🔔 *${config.company.name} Bot — Session Activation Required*\n\nReply to this message to keep your escalation alerts active with action buttons.\n\n⏳ Session expires in *${daysLeft} day${daysLeft !== 1 ? "s" : ""}*.`
+      );
+    }
+    console.log(`[Review] Sent 22h activation request — ${daysLeft} day(s) remaining`);
+  }, KEEP_ALIVE_INTERVAL_MS);
+
+  console.log(`[Review] Keep-alive started — activation requests every 22h for ${REVIEW_SESSION_DAYS} days`);
+}
+
+// --- Message deduplication (prevents duplicate processing from webhook retries) ---
+const recentMessageIds = new Set();
+const DEDUP_TTL = 60_000; // 60 seconds
+
+function isDuplicate(messageId) {
+  if (recentMessageIds.has(messageId)) return true;
+  recentMessageIds.add(messageId);
+  setTimeout(() => recentMessageIds.delete(messageId), DEDUP_TTL);
+  return false;
+}
+
+/**
+ * Main conversation handler — routes every incoming message through the
+ * claim-search + AI pipeline.
+ */
+export async function handleIncomingMessage(messagePayload) {
+  const { from, messageId, type, text, interactive, media } = normalizePayload(messagePayload);
+
+  if (!from || !messageId) return;
+
+  if (isDuplicate(messageId)) {
+    console.log(`[Dedup] Skipping duplicate message ${messageId}`);
+    return;
+  }
+
+  markAsRead(messageId);
+
+  // --- Review team message handling (human fact-checkers) ---
+  const reviewNumber = config.company.escalationWhatsApp.replace("+", "");
+  if (from === reviewNumber) {
+    startReviewKeepAlive();
+
+    if (type === "interactive") {
+      const interactiveId = interactive?.button_reply?.id || "";
+      if (interactiveId.startsWith("escalation_respond_")) {
+        const clientNumber = interactiveId.replace("escalation_respond_", "");
+        await handleReviewerResponse(clientNumber, "responded", reviewNumber);
+        return;
+      }
+      if (interactiveId.startsWith("escalation_later_")) {
+        const clientNumber = interactiveId.replace("escalation_later_", "");
+        await handleReviewerResponse(clientNumber, "later", reviewNumber);
+        return;
+      }
+      if (interactiveId === "review_keepalive_ack") {
+        await sendTextMessage(reviewNumber, `✅ Session activated! You'll receive escalation alerts with action buttons for the next 24 hours.`);
+        return;
+      }
+    }
+
+    const greeting = /^(hi|hello|hey|good\s*(?:morning|afternoon|evening)|yo|sup|howdy)[\s!.]*$/i;
+    if (greeting.test(text.trim())) {
+      const expiryDate = new Date(reviewSessionExpiry);
+      const expiryStr = expiryDate.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
+      await sendTextMessage(
+        reviewNumber,
+        `👋 Hello! I'm the ${config.company.name} bot assistant.\n\n✅ *Notification session activated for 30 days!*\nYou'll receive escalation alerts with interactive buttons until *${expiryStr}*.\n\nReply *hi* anytime to reset the window.`
+      );
+      return;
+    }
+
+    console.log(`[Review] Message from review team — keep-alive refreshed`);
+    return;
+  }
+
+  // --- Audio/voice message — politely ask for text ---
+  if (type === "audio") {
+    await sendTextMessage(
+      from,
+      `🎙️ I received your voice message!\n\nPlease send a *text message* instead — this helps me check claims and respond accurately. 😊\n\nWhat would you like to check today?`
+    );
+    return;
+  }
+
+  const session = await getSession(from);
+  let userText = extractUserText(type, text, interactive, media);
+  if (!userText) return; // unsupported message type
+
+  // --- Personalised-link support (Path A): strip & resolve a hidden [ref:memberId] token ---
+  const { memberId: refMemberId, cleanText } = extractRefToken(userText);
+  if (refMemberId) userText = cleanText || userText;
+
+  // --- Command shortcuts ---
+  const command = userText.trim().toLowerCase();
+
+  if (command === "/reset" || command === "start over") {
+    await updateState(from, "GREETING");
+    session.history = [];
+    await sendTextMessage(from, "🔄 Conversation reset! What would you like to check today?");
+    return;
+  }
+
+  if (command === "/menu" || command === "menu" || command === "help" || command === "/help") {
+    await sendMenu(from, session);
+    return;
+  }
+
+  const speakToHumanCmd = /^(?:\/agent|speak(?:\s+to)?\s+(?:an?\s+)?(?:agent|human|person|someone|staff|fact.?checker|team\s+member)|human\s+(?:agent|please|help|support)|talk\s+to\s+(?:an?\s+)?(?:agent|human|person|someone|fact.?checker|team\s+member)|connect\s+(?:me\s+)?(?:to|with)\s+(?:an?\s+)?(?:agent|human|person|real\s+person|someone|fact.?checker|staff|representative|team\s+member)|i\s+(?:want|need|would\s+like)\s+(?:to\s+(?:speak|talk|chat|connect)\s+(?:to|with)\s+)?(?:an?\s+)?(?:agent|human|person|real\s+person|fact.?checker|staff|someone)|get\s+(?:a\s+)?(?:human|real\s+person|agent|fact.?checker)|real\s+(?:agent|person|human)|report\s+(?:this|an?\s+issue))$/i;
+  if (speakToHumanCmd.test(command)) {
+    await handleEscalation(from, "User requested a human fact-checker");
+    return;
+  }
+
+  if (["register", "sign up", "signup", "create account", "create an account", "/register"].includes(command)) {
+    await updateState(from, "AWAITING_REGISTER_NAME");
+    await sendTextMessage(from, `Great! Let's get you registered. 📝\n\nWhat name should I save your account under?`);
+    return;
+  }
+
+  // --- Resolve identity: known member by ref token, phone match, or already-known session profile ---
+  if (!session.profile?.name) {
+    let member = null;
+    if (refMemberId) member = await findMemberById(refMemberId);
+    if (!member) member = await findMemberByPhone(from);
+    if (member) {
+      await updateProfile(from, { name: member.name, email: member.email || null, registered: true, memberId: member.memberId });
+      session.profile.name = member.name;
+      session.profile.registered = true;
+      touchMember(from).catch(() => {});
+    }
+  } else if (session.profile.registered) {
+    touchMember(from).catch(() => {});
+  }
+
+  // --- Name collection for in-chat registration ---
+  if (session.state === "AWAITING_REGISTER_NAME") {
+    const name = userText.trim().replace(/[.!,]+$/, "");
+    const looksLikeName = name.length >= 2 && name.length <= 60 && !/\?/.test(name) && !/^(?:no|skip|cancel)$/i.test(name);
+    if (!looksLikeName) {
+      await sendTextMessage(from, `Please share just your name so I can register your account — or type *cancel* to skip.`);
+      return;
+    }
+    if (/^cancel$/i.test(name)) {
+      await updateState(from, "ACTIVE");
+      await sendTextMessage(from, `No problem! You can register anytime by typing *register*.`);
+      return;
+    }
+    const member = await registerMember({ phone: from, name, source: "whatsapp" });
+    await updateState(from, "ACTIVE");
+    if (member) {
+      await updateProfile(from, { name: member.name, registered: true, memberId: member.memberId });
+      await sendTextMessage(
+        from,
+        `You're all set, *${name}*! ✅ Your ${config.company.name} account is active.\n\nI'll remember you next time you message. What would you like to check today?`
+      );
+    } else {
+      await sendTextMessage(from, `Sorry, registration isn't available right now (database offline). You can still ask me anything — I just won't remember your name between sessions.`);
+    }
+    return;
+  }
+
+  // --- Fresh session boundary: brand-new conversation OR TTL-reset returning
+  // session (resetSession() stamps `returningUser` on every TTL reset — see
+  // session.js). Both cases need a greeting, and critically, a bare "hi"/"hey"
+  // must STOP here rather than fall through to the AI — otherwise the bot
+  // drags in old (now-stale) history and just re-answers yesterday's question
+  // regardless of what the user actually typed today. Capture BEFORE adding
+  // this message so an empty history isn't masked by the push below.
+  const isBrandNewSession = session.history.length === 0;
+  const isTtlReset = session.metadata?.returningUser !== undefined;
+  // "+" on each word's trailing letter covers casual texting variants
+  // ("heyyy", "hiii", "helloo") — without it, those fall through to the AI
+  // pipeline instead of the deterministic greeting handling below/above,
+  // which is both slower and inconsistent (observed in production: "heyyy"
+  // got an AI-generated reply while "hi" sent moments later got the
+  // deterministic one, and out-of-order AI latency made the replies arrive
+  // in a confusing order).
+  const isJustGreeting = /^(hi+|hello+|hey+|sannu+|hola+|good\s*(?:morning|afternoon|evening)|yo+|sup+)[\s!.]*$/i.test(userText.trim());
+
+  await addMessage(from, "user", userText);
+
+  if (isBrandNewSession || isTtlReset) {
+    const knownName = session.profile?.name;
+
+    // Send greeting/welcome-back best-effort: a WhatsApp send failure here
+    // (rate limit, transient API error, invalid recipient) must not abort the
+    // rest of the handler — otherwise a non-bare-greeting first message (a
+    // real question) would silently get NO reply at all, since the exception
+    // would skip the AI pipeline below entirely. State is always persisted
+    // first regardless of whether the send succeeds.
+    if (isBrandNewSession) {
+      await updateState(from, "ACTIVE");
+      try {
+        await sendTextMessage(from, pickWelcomeMessage(knownName));
+      } catch (err) {
+        console.error(`[Greeting] Failed to send welcome message to ${from}:`, err.message);
+      }
+    } else {
+      delete session.metadata.returningUser;
+      await updateProfile(from, {}); // persist metadata deletion
+      try {
+        await sendTextMessage(
+          from,
+          knownName
+            ? `Welcome back, *${knownName}*! 😊 What would you like to check today?`
+            : `Welcome back! 👋 What would you like to check today?`
+        );
+      } catch (err) {
+        console.error(`[Greeting] Failed to send welcome-back message to ${from}:`, err.message);
+      }
+    }
+
+    // A bare greeting has nothing to fact-check — stop and wait for the real question.
+    if (isJustGreeting) return;
+    // Otherwise fall through and answer their actual question below.
+  }
+
+  // --- Escalated: the human reviewer owns this conversation now, not the AI ---
+  // Without this check, every message the user sends after asking for a human
+  // would still get an automatic AI reply — defeating the point of escalating.
+  // Forward it to the reviewer in real time and stay silent on our end; the
+  // conversation returns to ACTIVE (AI resumes) once the reviewer marks it
+  // "Responded" via the button in handleReviewerResponse().
+  if (session.state === "ESCALATED" && session.metadata?.escalation?.status !== "responded") {
+    try {
+      const reviewNumber = config.company.escalationWhatsApp.replace("+", "");
+      const name = session.profile?.name || "Guest";
+      await sendTextMessage(reviewNumber, `💬 Follow-up from *+${from}* (${name}):\n"${userText}"`);
+    } catch (err) {
+      console.error("[Escalation] Failed to forward follow-up message to reviewer:", err.message);
+    }
+    return;
+  }
+
+  // --- Bare greeting mid-conversation ("hi" typed again later, not at a
+  // fresh session boundary — that case is handled above) — without this,
+  // the message falls straight to the AI with the full conversation
+  // history. Observed in production: the model can reinterpret a bare
+  // greeting as a cue to re-summarize/re-confirm the previous topic
+  // instead of just greeting back, the same unreliable-instruction-
+  // following problem the off-topic guard below exists to avoid.
+  if (isJustGreeting) {
+    const knownName = session.profile?.name;
+    try {
+      await sendTextMessage(
+        from,
+        knownName
+          ? `Hi again, ${knownName}! 👋 What would you like to check today?`
+          : `Hi again! 👋 What would you like to check today?`
+      );
+    } catch (err) {
+      console.error(`[Greeting] Failed to send mid-conversation greeting to ${from}:`, err.message);
+    }
+    return;
+  }
+
+  // --- Off-topic guard — romantic advances, job/money requests, etc. ---
+  // Without this, a message like "I want to marry you" goes straight to the AI,
+  // which (observed in testing) doesn't reliably deflect it gracefully — it can
+  // latch onto leftover context and repeat an unrelated previous answer instead
+  // of a brief redirect. Catching these deterministically is more reliable than
+  // hoping the model follows the system-prompt instruction every time.
+  const OFF_TOPIC_PATTERNS = [
+    // "(?:you|u)" covers the common "u" abbreviation ("i love u", "i want to
+    // marry u") the original pattern missed. The negative lookahead on the
+    // "i want [to be with] you/u" alternative excludes "i want you to <verb>"
+    // -- a completely normal request phrasing ("i want you to check this
+    // claim") that the original pattern was wrongly catching as a romantic
+    // advance, since it never required "you" to end the message.
+    /\b(?:i\s+(?:love|like)\s+(?:you|u)|i\s+want\s+to\s+marry\s+(?:you|u)|will\s+(?:you|u)\s+marry\s+me|marry\s+me|be\s+my\s+(?:girlfriend|boyfriend|lover|wife|husband)|i\s+want\s+(?:to\s+be\s+with\s+)?(?:you|u)(?!\s+to\s+\w)|(?:you|u)\s+are\s+(?:so\s+)?beautiful|my\s+love|i\s+said\s+i\s+want\s+to\s+marry)\b/i,
+    /\b(?:send\s+(?:me\s+)?money|give\s+(?:me\s+)?money|i\s+need\s+money|lend\s+me|momo\s+me|mobile\s+money\s+me)\b/i,
+    /\b(?:looking\s+for\s+(?:a\s+)?(?:job|work)|hire\s+me|employ\s+me|i\s+need\s+(?:a\s+)?job)\b/i,
+  ];
+  if (OFF_TOPIC_PATTERNS.some((p) => p.test(userText))) {
+    session.metadata = session.metadata || {};
+    session.metadata.offTopicCount = (session.metadata.offTopicCount || 0) + 1;
+    await updateProfile(from, {}); // persist counter
+    if (session.metadata.offTopicCount <= 2) {
+      await sendTextMessage(
+        from,
+        `Ha, I appreciate it, but I'm just ${config.company.name}'s fact-checking assistant 😅 — I can't help with that.\n\nIf you've seen a claim, story, or rumour you'd like me to check, send it my way!`
+      );
+    }
+    // 3rd+ strike: stay silent rather than keep engaging.
+    return;
+  }
+
+  // --- Claim search + AI pipeline ---
+  const matchedClaims = await searchClaims(userText, { limit: 3 });
+  const member = session.profile?.registered ? { name: session.profile.name } : null;
+
+  const freshSession = await getSession(from);
+  // Only feed the AI provider the CURRENT session's messages, not the user's
+  // entire lifetime history — history.length can span multiple days once TTL
+  // resets start piling up, and an old topic from days ago would otherwise
+  // dominate the context for an unrelated question asked today. The full
+  // history still persists in MongoDB for the dashboard regardless of this filter.
+  const sessionStart = freshSession.metadata?.sessionStartedAt || 0;
+  const contextHistory = freshSession.history.filter((m) => m.timestamp >= sessionStart);
+
+  // Some requests can be inherently slow on the AI provider's side (e.g.
+  // ones that trigger a live web search for obscure/specific claims). The AI
+  // client timeout is 5 minutes (see aiService.js) so a genuinely slow
+  // answer is never dropped in favour of the "technical issue" fallback --
+  // but a silent multi-minute wait still feels broken, so check in twice:
+  // once early (most replies are back well before this) and again if it's
+  // still running well past that.
+  const interimTimers = [
+    setTimeout(() => {
+      sendTextMessage(from, "Still checking this one — it's a bit more involved, one moment... 🔍").catch(() => {});
+    }, 15000),
+    setTimeout(() => {
+      sendTextMessage(from, "Still on it — this claim is taking a bit longer to verify than usual, thanks for bearing with me 🙏").catch(() => {});
+    }, 60000),
+  ];
+  let aiResult;
+  try {
+    aiResult = await generateResponse(contextHistory, member, matchedClaims);
+  } finally {
+    interimTimers.forEach(clearTimeout);
+  }
+  await addMessage(from, "assistant", aiResult.text);
+
+  console.log(`[Chat] ${from} → ${userText}`);
+  console.log(`[Chat] Bot → ${aiResult.text.slice(0, 150)}...`);
+
+  // Best-effort send: if this throws, the escalation below (potentially a
+  // user explicitly asking for a human, or reporting something urgent/
+  // harmful) must still go through — a failed WhatsApp delivery on the AI's
+  // own reply is not a reason to also drop a safety-relevant handoff.
+  try {
+    await sendTextMessage(from, aiResult.text);
+  } catch (err) {
+    console.error(`[Chat] Failed to send AI reply to ${from}:`, err.message);
+  }
+
+  // --- Guest registration nudge — once per session, after a substantive answer ---
+  if (!session.profile?.registered && !session.metadata?.registrationPromptShown) {
+    const isSubstantive = aiResult.text.length > 60;
+    if (isSubstantive) {
+      session.metadata = session.metadata || {};
+      session.metadata.registrationPromptShown = true;
+      await updateProfile(from, {}); // persist metadata
+      try {
+        await sendTextMessage(
+          from,
+          `\nWant to submit claims for investigation or track updates? Type *register* to link this WhatsApp number to a ${config.company.name} account now.`
+        );
+      } catch (err) {
+        console.error(`[Chat] Failed to send registration nudge to ${from}:`, err.message);
+      }
+    }
+  }
+
+  if (aiResult.escalate) {
+    await handleEscalation(from, aiResult.escalate);
+  }
+}
+
+/**
+ * Send the quick menu
+ */
+async function sendMenu(to, session) {
+  const known = session.profile?.registered;
+  await sendButtonMessage(
+    to,
+    "What would you like to do? Or just type a claim/question directly. 😊",
+    [
+      { id: "speak_agent", title: "👤 Human Fact-Checker" },
+      { id: known ? "noop_registered" : "do_register", title: known ? "✅ Account Linked" : "📝 Register" },
+    ],
+    config.company.name,
+    "Type 'menu' anytime to see this again"
+  );
+}
+
+/**
+ * Handle escalation to a human fact-checker / review team member
+ */
+async function handleEscalation(to, reason) {
+  await updateState(to, "ESCALATED");
+
+  const session = await getSession(to);
+  session.metadata = session.metadata || {};
+  session.metadata.escalation = {
+    status: "awaiting_reviewer",
+    reason,
+    timestamp: Date.now(),
+  };
+  await updateProfile(to, {});
+
+  // Best-effort: if this confirmation fails to send, the reviewer notification
+  // below (the actually critical part of an escalation) must still fire —
+  // previously a failure here would throw out of the whole function and the
+  // human review team would never learn about the escalation at all.
+  try {
+    await sendTextMessage(
+      to,
+      `👤 *Connecting you with our fact-checking team*\n\nI'm passing this on to a human reviewer who can help further.\n\n📞 You can also reach us directly on WhatsApp: ${config.company.escalationWhatsApp}\n\n🕒 ${config.company.businessHours}\n\nSomeone will respond shortly. Thank you for your patience! 🙏`
+    );
+  } catch (err) {
+    console.error(`[Escalation] Failed to send confirmation to ${to}:`, err.message);
+  }
+
+  try {
+    const name = session.profile?.name || "Guest";
+    const reviewNumber = config.company.escalationWhatsApp.replace("+", "");
+
+    // A BSUID (someone who hid their phone number via WhatsApp usernames)
+    // has no wa.me link a reviewer can click — that deep link only resolves
+    // phone numbers. Say so plainly instead of handing them a dead link, and
+    // don't mislabel the BSUID as a "Phone".
+    const contactLine = isBsuid(to) ? `🆔 *Contact ID:* ${to}` : `📱 *Phone:* +${to}`;
+    const replyLine = isBsuid(to)
+      ? `This user has hidden their number — reply here in the bot conversation, wa.me won't work for them.`
+      : `Reply to the user directly: wa.me/${to}`;
+
+    const clientInfo =
+      `🔔 *New Escalation — ${config.company.name}*\n\n` +
+      `👤 *Name:* ${name}\n` +
+      `${contactLine}\n` +
+      `📋 *Registered:* ${session.profile?.registered ? "Yes" : "No (guest)"}\n\n` +
+      `📝 *Reason:* ${reason}\n\n` +
+      `${replyLine}`;
+
+    const textResult = await sendTextMessage(reviewNumber, clientInfo);
+    console.log(`[Escalation] ✅ Review team notified:`, textResult?.messages?.[0]?.id || "ID not returned");
+
+    try {
+      await sendButtonMessage(
+        reviewNumber,
+        `Tap to update status:`,
+        [
+          { id: `escalation_respond_${to}`, title: "Responded" },
+          { id: `escalation_later_${to}`, title: "Later" },
+        ],
+        "Quick Actions"
+      );
+    } catch {
+      console.log(`[Escalation] Buttons unavailable (outside 24h window) — plain text already delivered`);
+    }
+  } catch (err) {
+    console.error(`[Escalation] ❌ Failed to notify review team:`, err.response?.data || err.message);
+  }
+
+  console.log(`[Escalation] ${to} — Reason: ${reason}`);
+}
+
+/**
+ * Handle a reviewer's response to an escalation (button press)
+ */
+async function handleReviewerResponse(clientNumber, action, reviewNumber) {
+  const session = await getSession(clientNumber);
+  session.metadata = session.metadata || {};
+
+  if (action === "responded") {
+    session.metadata.escalation = { ...session.metadata.escalation, status: "responded", respondedAt: Date.now() };
+    await updateProfile(clientNumber, {});
+    await updateState(clientNumber, "ACTIVE");
+    await sendTextMessage(reviewNumber, `✅ Noted! User +${clientNumber} marked as attended to.`);
+  } else {
+    session.metadata.escalation = { ...session.metadata.escalation, status: "awaiting_reviewer" };
+    await updateProfile(clientNumber, {});
+    await sendTextMessage(reviewNumber, `⏰ Noted! User +${clientNumber} is still awaiting a response.`);
+  }
+}
+
+/**
+ * Normalize the incoming WhatsApp payload
+ */
+function normalizePayload(messagePayload) {
+  const type = messagePayload.type;
+  const mediaTypes = ["image", "video", "document", "audio", "sticker"];
+  const raw = mediaTypes.includes(type) ? messagePayload[type] : null;
+  return {
+    // Meta's newer "usernames" feature identifies the sender by a BSUID
+    // (from_user_id, e.g. "GH.968770808955253") instead of a phone number
+    // (from) when the customer has a WhatsApp username set up. Fall back to
+    // it so these conversations aren't silently dropped.
+    from: messagePayload.from || messagePayload.from_user_id,
+    messageId: messagePayload.id,
+    type,
+    text: messagePayload.text?.body || "",
+    interactive: messagePayload.interactive || null,
+    media: raw ? { id: raw.id, caption: raw.caption || "", mimeType: raw.mime_type || "" } : null,
+  };
+}
+
+/**
+ * Extract readable user text from different message types
+ */
+function extractUserText(type, text, interactive, media) {
+  switch (type) {
+    case "text":
+      return text;
+    case "interactive":
+      if (interactive?.type === "button_reply") {
+        const id = interactive.button_reply?.id;
+        if (id === "speak_agent") return "speak to agent";
+        if (id === "do_register") return "register";
+        if (id === "noop_registered") return null;
+        return interactive.button_reply?.title || id;
+      }
+      if (interactive?.type === "list_reply") {
+        return interactive.list_reply?.title || interactive.list_reply?.id;
+      }
+      return null;
+    case "image":
+      return media?.caption ? `[Image: ${media.caption}] — can you check if this is genuine or misleading?` : "[User sent an image] — can you check if this is genuine or misleading?";
+    case "video":
+      return media?.caption ? `[Video: ${media.caption}]` : "[User sent a video]";
+    case "document":
+      return media?.caption ? `[Document: ${media.caption}]` : "[User sent a document]";
+    case "location":
+      return "I shared my location";
+    default:
+      return null;
+  }
+}
