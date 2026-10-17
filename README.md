@@ -31,6 +31,8 @@ history.
 
 ## Prerequisites
 
+> Full step-by-step setup guide (every required credential and how to get it): open [`SETUP_GUIDE.html`](./SETUP_GUIDE.html) in your browser.
+
 You'll need accounts/access for all of these before the bot can go live:
 
 | What | Where | Why |

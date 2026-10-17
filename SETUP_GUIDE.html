@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Genericbot Setup Guide</title>
+<style>
+  :root {
+    --bg: #f7f6f1; --surface: #ffffff; --text: #1c2430; --muted: #5b6573;
+    --border: #e2dfd6; --brand: #1e3f6b; --accent: #b8860b;
+    --req: #b42318; --req-bg: #fdecea; --opt: #2d6a4f; --opt-bg: #e6f4ec;
+    --rec: #8a5a00; --rec-bg: #fff4d6; --code-bg: #f0eee7;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #12161c; --surface: #1a2029; --text: #e6e9ee; --muted: #9aa4b2;
+      --border: #2c3542; --brand: #8fb4e8; --accent: #e0b84a;
+      --req: #ff8a80; --req-bg: #3a1d1d; --opt: #7fd1a5; --opt-bg: #17302a;
+      --rec: #f0c26a; --rec-bg: #33290f; --code-bg: #232b36;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #12161c; --surface: #1a2029; --text: #e6e9ee; --muted: #9aa4b2;
+    --border: #2c3542; --brand: #8fb4e8; --accent: #e0b84a;
+    --req: #ff8a80; --req-bg: #3a1d1d; --opt: #7fd1a5; --opt-bg: #17302a;
+    --rec: #f0c26a; --rec-bg: #33290f; --code-bg: #232b36;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 32px 16px 80px; }
+  h1 { font-size: 1.9rem; margin: 0 0 4px; color: var(--brand); }
+  h2 { font-size: 1.35rem; margin: 48px 0 12px; color: var(--brand); border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+  h3 { font-size: 1.08rem; margin: 24px 0 8px; }
+  p, li { color: var(--text); }
+  .muted { color: var(--muted); }
+  a { color: var(--brand); }
+  code, pre { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: .9em; }
+  code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+  pre { background: var(--code-bg); padding: 12px 14px; border-radius: 8px; overflow-x: auto; }
+  pre code { background: none; padding: 0; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; margin: 14px 0; }
+  .tag { display: inline-block; font-size: .72rem; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; padding: 2px 8px; border-radius: 999px; vertical-align: middle; }
+  .req { color: var(--req); background: var(--req-bg); }
+  .rec { color: var(--rec); background: var(--rec-bg); }
+  .opt { color: var(--opt); background: var(--opt-bg); }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: .92rem; background: var(--surface); }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; }
+  nav ol { columns: 2; column-gap: 32px; padding-left: 20px; }
+  @media (max-width: 600px) { nav ol { columns: 1; } }
+  .check { list-style: none; padding: 0; }
+  .check li { display: flex; gap: 10px; align-items: flex-start; padding: 6px 0; border-bottom: 1px dashed var(--border); }
+  .check input { margin-top: 5px; width: 18px; height: 18px; flex: none; accent-color: var(--brand); }
+  .check label { cursor: pointer; }
+  .progress { height: 8px; background: var(--border); border-radius: 999px; overflow: hidden; margin: 8px 0 4px; }
+  .progress > div { height: 100%; width: 0; background: var(--brand); transition: width .2s; }
+  .note { border-left: 4px solid var(--accent); padding: 8px 14px; background: var(--surface); border-radius: 0 8px 8px 0; margin: 14px 0; }
+  .theme-btn { float: right; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; cursor: pointer; font: inherit; font-size: .85rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<button class="theme-btn" id="themeBtn" type="button">Toggle theme</button>
+<h1>Genericbot setup guide</h1>
+<p class="muted">Everything the WhatsApp AI bot needs before it can start and actually answer messages, and how to get each piece.</p>
+
+<div class="card">
+  <strong>Legend:</strong>
+  <span class="tag req">Required</span> the server will not start without it &nbsp;
+  <span class="tag rec">Needed to work</span> the server starts, but the bot can't do its job without it &nbsp;
+  <span class="tag opt">Optional</span> nice to have
+</div>
+
+<nav class="card">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#checklist">Master checklist</a></li>
+    <li><a href="#tools">Local tools</a></li>
+    <li><a href="#meta">Meta / WhatsApp Cloud API</a></li>
+    <li><a href="#tunnel">Public URL &amp; webhook</a></li>
+    <li><a href="#mongo">MongoDB Atlas</a></li>
+    <li><a href="#ai">AI provider</a></li>
+    <li><a href="#claims">Knowledge base / Claims API</a></li>
+    <li><a href="#admin">Admin dashboard login</a></li>
+    <li><a href="#company">Company details</a></li>
+    <li><a href="#env">Full <code>.env</code> reference</a></li>
+    <li><a href="#run">Build &amp; run</a></li>
+    <li><a href="#deploy">Deploy to Render</a></li>
+    <li><a href="#verify">Verify &amp; troubleshoot</a></li>
+  </ol>
+</nav>
+
+<!-- ───────────────────────── CHECKLIST ───────────────────────── -->
+<h2 id="checklist">1. Master checklist</h2>
+<p class="muted">Tick items as you go. Ticks are saved in this browser only.</p>
+<div class="progress"><div id="bar"></div></div>
+<p class="muted" id="progressText">0 done</p>
+<ul class="check" id="checklist-items">
+  <li><input type="checkbox" id="c1"><label for="c1">Node.js 18+ and npm installed <span class="tag req">Required</span></label></li>
+  <li><input type="checkbox" id="c2"><label for="c2">Dependencies installed in root and <code>client/</code> <span class="tag req">Required</span></label></li>
+  <li><input type="checkbox" id="c3"><label for="c3"><code>.env</code> created from <code>.env.example</code> <span class="tag req">Required</span></label></li>
+  <li><input type="checkbox" id="c4"><label for="c4">Meta Business Portfolio + Developer App with WhatsApp product <span class="tag req">Required</span></label></li>
+  <li><input type="checkbox" id="c5"><label for="c5"><code>WHATSAPP_TOKEN</code> (permanent System User token) <span class="tag req">Required</span></label></li>
+  <li><input type="checkbox" id="c6"><label for="c6"><code>PHONE_NUMBER_ID</code> <span class="tag req">Required</span></label></li>
+  <li><input type="checkbox" id="c7"><label for="c7"><code>VERIFY_TOKEN</code> (a random string you invent) <span class="tag req">Required</span></label></li>
+  <li><input type="checkbox" id="c8"><label for="c8">Public HTTPS URL (ngrok locally, or a deployed host) <span class="tag rec">Needed to work</span></label></li>
+  <li><input type="checkbox" id="c9"><label for="c9">Webhook verified in Meta and subscribed to <code>messages</code> <span class="tag rec">Needed to work</span></label></li>
+  <li><input type="checkbox" id="c10"><label for="c10">AI provider endpoint: <code>AI_API_BASE_URL</code> + <code>AI_API_KEY</code> <span class="tag rec">Needed to work</span></label></li>
+  <li><input type="checkbox" id="c11"><label for="c11">MongoDB Atlas cluster: <code>MONGODB_URI</code> <span class="tag rec">Needed to work</span></label></li>
+  <li><input type="checkbox" id="c12"><label for="c12">Strong <code>ADMIN_PASSWORD</code> and <code>JWT_SECRET</code> <span class="tag rec">Needed to work</span></label></li>
+  <li><input type="checkbox" id="c13"><label for="c13">Dashboard built (<code>npm run build</code>) <span class="tag rec">Needed to work</span></label></li>
+  <li><input type="checkbox" id="c14"><label for="c14">Company details filled in (<code>COMPANY_*</code>) <span class="tag opt">Optional</span></label></li>
+  <li><input type="checkbox" id="c15"><label for="c15">Knowledge base: <code>CLAIMS_API_BASE_URL</code> + <code>CLAIMS_API_KEY</code> <span class="tag opt">Optional</span></label></li>
+  <li><input type="checkbox" id="c16"><label for="c16">Meta Business Verification + display name approved <span class="tag opt">Optional for testing, required for launch</span></label></li>
+</ul>
+
+<!-- ───────────────────────── TOOLS ───────────────────────── -->
+<h2 id="tools">2. Local tools <span class="tag req">Required</span></h2>
+<div class="card">
+  <ul>
+    <li><strong>Node.js 18 or newer</strong> (Express 5 and Vite 5 need it). Download the LTS build from <a href="https://nodejs.org" target="_blank" rel="noopener">nodejs.org</a>, then check with <code>node -v</code>.</li>
+    <li><strong>Git</strong>, from <a href="https://git-scm.com" target="_blank" rel="noopener">git-scm.com</a>, to clone and push the repo.</li>
+  </ul>
+  <p>Then install dependencies from the project root:</p>
+<pre><code>git clone https://github.com/muheebnuaku/Genericbot.git
+cd Genericbot
+npm install
+cd client &amp;&amp; npm install &amp;&amp; cd ..
+cp .env.example .env      # Windows PowerShell: Copy-Item .env.example .env</code></pre>
+  <div class="note"><strong>Never commit <code>.env</code>.</strong> It is already in <code>.gitignore</code>. Only <code>.env.example</code> (placeholders) belongs in git.</div>
+</div>
+
+<!-- ───────────────────────── META ───────────────────────── -->
+<h2 id="meta">3. Meta / WhatsApp Cloud API <span class="tag req">Required</span></h2>
+<p>The server refuses to start (<code>Missing required environment variable</code>) unless these three are set: <code>VERIFY_TOKEN</code>, <code>WHATSAPP_TOKEN</code>, <code>PHONE_NUMBER_ID</code>.</p>
+
+<h3>3.1 Create the business &amp; app</h3>
+<ol>
+  <li>Sign in at <a href="https://business.facebook.com" target="_blank" rel="noopener">business.facebook.com</a> and create a <strong>Business Portfolio</strong> if you don't have one.</li>
+  <li>Go to <a href="https://developers.facebook.com/apps" target="_blank" rel="noopener">developers.facebook.com/apps</a> → <strong>Create app</strong> → use case <em>“Connect with customers through WhatsApp”</em> (type <em>Business</em>) → link it to your Business Portfolio.</li>
+  <li>In the app, open <strong>WhatsApp → API Setup</strong>. Meta gives you a free <strong>test number</strong> straight away; you can use it before you register a real one.</li>
+  <li>Under <em>“To”</em>, add and verify your own phone number as a test recipient (the test number can only message up to 5 verified numbers).</li>
+</ol>
+
+<h3>3.2 <code>PHONE_NUMBER_ID</code></h3>
+<p>On the same <strong>API Setup</strong> page, copy <strong>Phone number ID</strong>. It's a long number, <em>not</em> the phone number itself.</p>
+
+<h3>3.3 <code>WHATSAPP_TOKEN</code> (make it permanent)</h3>
+<p>The token shown on API Setup expires after 24 hours. For anything beyond a quick test, create a permanent one:</p>
+<ol>
+  <li><strong>Business Settings → Users → System users → Add</strong>. Create an <em>Admin</em> system user.</li>
+  <li><strong>Assign assets</strong>: add your app (full control) and your WhatsApp account.</li>
+  <li><strong>Generate new token</strong>: pick your app, expiry <em>Never</em>, and tick <code>whatsapp_business_messaging</code> and <code>whatsapp_business_management</code>.</li>
+  <li>Copy the token into <code>WHATSAPP_TOKEN</code>. It is shown only once.</li>
+</ol>
+
+<h3>3.4 <code>VERIFY_TOKEN</code></h3>
+<p>You make this up. It's any random string, used only so Meta can prove the webhook belongs to you. Generate one with:</p>
+<pre><code>node -e "console.log(require('crypto').randomBytes(24).toString('hex'))"</code></pre>
+<p>Use the exact same value in <code>.env</code> and in Meta's webhook settings (step 4).</p>
+
+<h3>3.5 Going live (do this early, it takes days)</h3>
+<ul>
+  <li><strong>Business Verification</strong>: Business Settings → Security Center → Start verification (needs business documents).</li>
+  <li><strong>Register a real number</strong>: WhatsApp Manager → Phone numbers → Add. The number must not be in use on the normal WhatsApp app.</li>
+  <li><strong>Display name review</strong>: submitted in WhatsApp Manager; approval is required before customers see your name.</li>
+  <li><strong>Payment method</strong>: add one in WhatsApp Manager for business-initiated conversations (broadcasts).</li>
+  <li>Switch the app from <em>Development</em> to <em>Live</em> mode (needs a privacy-policy URL).</li>
+</ul>
+
+<!-- ───────────────────────── TUNNEL ───────────────────────── -->
+<h2 id="tunnel">4. Public URL &amp; webhook <span class="tag rec">Needed to work</span></h2>
+<p>Meta must reach your server over public HTTPS. <code>localhost</code> won't work.</p>
+<h3>Testing on your PC: ngrok</h3>
+<ol>
+  <li>Sign up at <a href="https://ngrok.com" target="_blank" rel="noopener">ngrok.com</a>, install it, and run <code>ngrok config add-authtoken &lt;your-token&gt;</code>.</li>
+  <li>Start the bot (<code>npm start</code>), then in a second terminal run <code>ngrok http 3000</code>.</li>
+  <li>Copy the <code>https://….ngrok-free.app</code> URL.</li>
+</ol>
+<h3>Connect it in Meta</h3>
+<ol>
+  <li>App dashboard → <strong>WhatsApp → Configuration → Webhook → Edit</strong>.</li>
+  <li><strong>Callback URL</strong>: <code>https://YOUR-URL/webhook</code></li>
+  <li><strong>Verify token</strong>: the same value as <code>VERIFY_TOKEN</code>. Click <em>Verify and save</em>. The server logs <code>[Webhook] Verified successfully</code>.</li>
+  <li>Under <strong>Webhook fields</strong>, <strong>Subscribe</strong> to <code>messages</code>.</li>
+</ol>
+<p>Set <code>BASE_URL</code> to the same public URL (no trailing slash). The bot uses it for media links and a keep-alive ping.</p>
+
+<!-- ───────────────────────── MONGO ───────────────────────── -->
+<h2 id="mongo">5. MongoDB Atlas <span class="tag rec">Needed to work</span></h2>
+<p>Without <code>MONGODB_URI</code> the bot runs in memory and <strong>forgets every conversation, member and broadcast on restart</strong>.</p>
+<ol>
+  <li>Create a free account at <a href="https://www.mongodb.com/atlas" target="_blank" rel="noopener">mongodb.com/atlas</a> → <strong>Build a cluster</strong> → pick the free <em>M0</em> tier.</li>
+  <li><strong>Database Access → Add user</strong>: username + password (avoid symbols like <code>@ : / ?</code>, or URL-encode them).</li>
+  <li><strong>Network Access → Add IP</strong>: your IP for local testing; <code>0.0.0.0/0</code> for cloud hosts like Render whose IPs change.</li>
+  <li><strong>Connect → Drivers</strong>, then copy the connection string and put your password in it:
+<pre><code>MONGODB_URI=mongodb+srv://botuser:YOURPASSWORD@cluster0.xxxxx.mongodb.net
+MONGODB_DB_NAME=whatsapp-bot</code></pre></li>
+</ol>
+<p>On start, the log should say <code>Database: MongoDB Atlas ✅</code>.</p>
+
+<!-- ───────────────────────── AI ───────────────────────── -->
+<h2 id="ai">6. AI provider <span class="tag rec">Needed to work</span></h2>
+<p>This produces the bot's replies. Without it, every message gets <em>“I'm having a brief technical issue right now…”</em>.</p>
+<p>The code in <code>src/services/aiService.js</code> → <code>callAiProvider()</code> expects an HTTP endpoint with this contract:</p>
+<div class="table-wrap"><table>
+  <tr><th>Request</th><td><code>POST {AI_API_BASE_URL}/v1/chat</code><br>Header <code>Authorization: Bearer {AI_API_KEY}</code> (sent only if the key is set)</td></tr>
+  <tr><th>Body</th><td><code>{ message, system, history:[{role,content}], temperature, max_tokens, response_language, web_search }</code></td></tr>
+  <tr><th>Response</th><td><code>{ "reply": "...", "sources": [] }</code> or <code>{ "data": { "message": "...", "sources": [] } }</code></td></tr>
+</table></div>
+
+<h3>Choose one option</h3>
+<div class="card">
+  <strong>A. You already have an API with that shape</strong>: set <code>AI_API_BASE_URL</code> and <code>AI_API_KEY</code> and you're done.
+</div>
+<div class="card">
+  <strong>B. Use a mainstream LLM (Claude, OpenAI, Gemini…)</strong>: their APIs use a different shape, so edit <code>callAiProvider()</code> to call them directly. For example, with the Anthropic API:
+  <ol>
+    <li>Get a key at <a href="https://console.anthropic.com" target="_blank" rel="noopener">console.anthropic.com</a> → API Keys (billing required).</li>
+    <li>Set <code>AI_API_BASE_URL=https://api.anthropic.com</code> and <code>AI_API_KEY=sk-ant-…</code>.</li>
+    <li>In <code>callAiProvider()</code>, POST to <code>${ai.baseUrl}/v1/messages</code> with headers <code>x-api-key</code>, <code>anthropic-version: 2023-06-01</code>, and body <code>{ model, max_tokens, system, messages: [...historyPayload, {role:"user", content: message}] }</code>.</li>
+    <li>Read the reply from <code>response.data.content[0].text</code> and use <code>sources = []</code>.</li>
+  </ol>
+</div>
+<p class="muted">Also rewrite rules 1–10 in <code>buildSystemPrompt()</code> for your business. They are currently written for a fact-checking bot. Keep rules 11–12; they fix WhatsApp formatting.</p>
+
+<!-- ───────────────────────── CLAIMS ───────────────────────── -->
+<h2 id="claims">7. Knowledge base / Claims API <span class="tag opt">Optional</span></h2>
+<p>This lets the bot cite your own published records (FAQ, help articles, catalog, fact-checks). Without it the bot still chats, but only from the AI's general knowledge.</p>
+<p><code>src/services/claimsApi.js</code> expects:</p>
+<div class="table-wrap"><table>
+  <tr><th>Auth</th><td><code>Authorization: Bearer {CLAIMS_API_KEY}</code></td></tr>
+  <tr><th>Search</th><td><code>GET {CLAIMS_API_BASE_URL}/claims?q=…&amp;per_page=3</code></td></tr>
+  <tr><th>Single</th><td><code>GET {CLAIMS_API_BASE_URL}/claims/{id}</code></td></tr>
+  <tr><th>Record fields</th><td><code>id, title, content, source, topics, regions, language, url, published_at, updated_at, cover_image_url, verdict{verdict, summary, research, reference_link, checked_at, fact_checker}</code></td></tr>
+</table></div>
+<p>If your data source looks different, either build a small API with this shape or edit <code>normalizeClaim()</code> and the request paths to match yours. Leave both variables blank to skip this.</p>
+
+<!-- ───────────────────────── ADMIN ───────────────────────── -->
+<h2 id="admin">8. Admin dashboard login <span class="tag rec">Needed to work</span></h2>
+<p>The dashboard at <code>/app</code> uses these credentials. The defaults (<code>admin</code> / <code>change-me</code>) are public, so <strong>change them before deploying</strong>.</p>
+<pre><code>ADMIN_USERNAME=admin
+ADMIN_PASSWORD=a-long-unique-password
+JWT_SECRET=paste-output-of-the-random-command-from-3.4</code></pre>
+
+<!-- ───────────────────────── COMPANY ───────────────────────── -->
+<h2 id="company">9. Company details <span class="tag opt">Optional</span></h2>
+<p>These go into the AI's system prompt and the messages users see. The defaults say “Your Company”, so fill them in before real users see the bot.</p>
+<p><code>COMPANY_NAME</code>, <code>COMPANY_INDUSTRY</code>, <code>COMPANY_DESCRIPTION</code> (the most important one: describe what the assistant is for), <code>COMPANY_WEBSITE</code>, <code>COMPANY_PHONE</code>, <code>COMPANY_EMAIL</code>, <code>COMPANY_ADDRESS</code>, <code>COMPANY_TONE</code>, <code>COMPANY_BUSINESS_HOURS</code>, <code>ESCALATION_WHATSAPP</code> (the human who receives “talk to a person” handoffs).</p>
+
+<!-- ───────────────────────── ENV ───────────────────────── -->
+<h2 id="env">10. Full <code>.env</code> reference</h2>
+<div class="table-wrap"><table>
+  <tr><th>Variable</th><th>Status</th><th>Where it comes from</th></tr>
+  <tr><td><code>VERIFY_TOKEN</code></td><td><span class="tag req">Required</span></td><td>You invent it (§3.4)</td></tr>
+  <tr><td><code>WHATSAPP_TOKEN</code></td><td><span class="tag req">Required</span></td><td>Meta System User token (§3.3)</td></tr>
+  <tr><td><code>PHONE_NUMBER_ID</code></td><td><span class="tag req">Required</span></td><td>Meta API Setup page (§3.2)</td></tr>
+  <tr><td><code>AI_API_BASE_URL</code>, <code>AI_API_KEY</code></td><td><span class="tag rec">Needed to work</span></td><td>Your AI provider (§6)</td></tr>
+  <tr><td><code>MONGODB_URI</code>, <code>MONGODB_DB_NAME</code></td><td><span class="tag rec">Needed to work</span></td><td>MongoDB Atlas (§5)</td></tr>
+  <tr><td><code>ADMIN_USERNAME</code>, <code>ADMIN_PASSWORD</code>, <code>JWT_SECRET</code></td><td><span class="tag rec">Needed to work</span></td><td>You choose (§8)</td></tr>
+  <tr><td><code>BASE_URL</code></td><td><span class="tag rec">Needed to work</span></td><td>Your public URL (§4); set automatically on Render</td></tr>
+  <tr><td><code>CLAIMS_API_BASE_URL</code>, <code>CLAIMS_API_KEY</code></td><td><span class="tag opt">Optional</span></td><td>Your knowledge base (§7)</td></tr>
+  <tr><td><code>COMPANY_*</code>, <code>ESCALATION_WHATSAPP</code></td><td><span class="tag opt">Optional</span></td><td>Your business info (§9)</td></tr>
+  <tr><td><code>WHATSAPP_DISPLAY_NUMBER</code></td><td><span class="tag opt">Optional</span></td><td>Your WhatsApp number, digits only, for “Chat on WhatsApp” links</td></tr>
+  <tr><td><code>DEFAULT_COUNTRY_CODE</code></td><td><span class="tag opt">Optional</span></td><td>For example <code>233</code> (Ghana), used when broadcast uploads lack a <code>+</code></td></tr>
+  <tr><td><code>PORT</code></td><td><span class="tag opt">Optional</span></td><td>Defaults to 3000</td></tr>
+</table></div>
+
+<!-- ───────────────────────── RUN ───────────────────────── -->
+<h2 id="run">11. Build &amp; run</h2>
+<pre><code>npm run build     # builds the React dashboard into public/app (needed for /app)
+npm start         # production
+npm run dev       # development, restarts on file changes</code></pre>
+<p>Healthy startup log:</p>
+<pre><code>🤖 Your Company WhatsApp Assistant
+   Server running on port 3000
+   Database:   MongoDB Atlas ✅
+   Webhook:    http://localhost:3000/webhook
+   Dashboard:  http://localhost:3000/app
+   AI Provider: https://…
+   Claims API: configured ✅</code></pre>
+
+<!-- ───────────────────────── DEPLOY ───────────────────────── -->
+<h2 id="deploy">12. Deploy to Render</h2>
+<p>Use an always-on Node host (Render, Railway, a VPS). Serverless platforms don't fit, because the bot processes messages in the background after replying to Meta.</p>
+<ol>
+  <li><a href="https://render.com" target="_blank" rel="noopener">render.com</a> → <strong>New → Web Service</strong> → connect the GitHub repo <code>muheebnuaku/Genericbot</code>.</li>
+  <li><strong>Build command:</strong> <code>npm install &amp;&amp; npm run build</code></li>
+  <li><strong>Start command:</strong> <code>npm start</code></li>
+  <li><strong>Environment</strong>: add every variable from your <code>.env</code>. <em>Type secrets in by hand</em>; pasted values can pick up a hidden trailing space or newline that breaks login.</li>
+  <li>After deploying, point Meta's webhook at <code>https://your-service.onrender.com/webhook</code> (§4).</li>
+</ol>
+<p class="muted">The free tier sleeps when idle. The built-in keep-alive pings <code>/api/health</code> every 14 minutes, which also counts against your free hours.</p>
+
+<!-- ───────────────────────── VERIFY ───────────────────────── -->
+<h2 id="verify">13. Verify &amp; troubleshoot</h2>
+<div class="table-wrap"><table>
+  <tr><th>Check</th><th>Expected</th></tr>
+  <tr><td>Open <code>http://localhost:3000/</code></td><td>JSON with <code>"status": "running"</code></td></tr>
+  <tr><td>Open <code>/app</code> and log in</td><td>Dashboard Overview page</td></tr>
+  <tr><td>Meta webhook <em>Verify and save</em></td><td>Log: <code>[Webhook] Verified successfully</code></td></tr>
+  <tr><td>Send “hi” to the bot from your test phone</td><td>Log: <code>[Message] From: …</code>, then a reply on WhatsApp</td></tr>
+</table></div>
+
+<h3>Common problems</h3>
+<div class="table-wrap"><table>
+  <tr><th>Symptom</th><th>Fix</th></tr>
+  <tr><td><code>Missing required environment variable: …</code></td><td>Set that variable in <code>.env</code> (or the host's environment settings).</td></tr>
+  <tr><td><code>[Webhook] Verification failed — token mismatch</code></td><td>The token in Meta must equal <code>VERIFY_TOKEN</code> exactly. Check for spaces.</td></tr>
+  <tr><td>Messages arrive in logs but no reply on WhatsApp</td><td><code>WHATSAPP_TOKEN</code> is expired or lacks permissions, or your phone isn't a verified test recipient.</td></tr>
+  <tr><td>No <code>[Message]</code> logs at all</td><td>Webhook not subscribed to <code>messages</code>, or ngrok URL changed (free ngrok URLs change on restart).</td></tr>
+  <tr><td>Bot replies “brief technical issue”</td><td>AI provider call failed. Check <code>AI_API_BASE_URL</code>, the key, and the request shape (§6).</td></tr>
+  <tr><td><code>/app</code> shows a blank page or a 404</td><td>Run <code>npm run build</code>.</td></tr>
+  <tr><td>Dashboard says “Invalid credentials” with the right password</td><td>A hidden whitespace in the host's env value. Retype it by hand.</td></tr>
+  <tr><td><code>Database: In-memory</code></td><td><code>MONGODB_URI</code> missing or wrong, or your IP isn't allowed in Atlas Network Access.</td></tr>
+</table></div>
+
+</div>
+<script>
+  (function () {
+    var store = {
+      get: function (k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+      set: function (k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+    };
+    var boxes = document.querySelectorAll('#checklist-items input');
+    var bar = document.getElementById('bar');
+    var txt = document.getElementById('progressText');
+    function update() {
+      var done = 0;
+      boxes.forEach(function (b) { if (b.checked) done++; });
+      bar.style.width = (done / boxes.length * 100) + '%';
+      txt.textContent = done + ' of ' + boxes.length + ' done';
+    }
+    boxes.forEach(function (b) {
+      b.checked = store.get('genericbot-' + b.id) === '1';
+      b.addEventListener('change', function () { store.set('genericbot-' + b.id, b.checked ? '1' : '0'); update(); });
+    });
+    update();
+
+    var root = document.documentElement;
+    var saved = store.get('genericbot-theme');
+    if (saved) root.setAttribute('data-theme', saved);
+    document.getElementById('themeBtn').addEventListener('click', function () {
+      var cur = root.getAttribute('data-theme') ||
+        (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+      var next = cur === 'dark' ? 'light' : 'dark';
+      root.setAttribute('data-theme', next);
+      store.set('genericbot-theme', next);
+    });
+  })();
+</script>
+</body>
+</html>
